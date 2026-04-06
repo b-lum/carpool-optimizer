@@ -1,0 +1,53 @@
+# ======================
+# Node / Frontend
+# ======================
+node_modules/
+dist/
+build/
+.next/
+coverage/
+
+# ======================
+# Python / Backend
+# ======================
+__pycache__/
+*.pyc
+venv/
+.env
+.env.*
+*.sqlite3
+
+# ======================
+# Docker
+# ======================
+docker-data/
+*.log
+
+# ======================
+# OS
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# IDE
+# ======================
+.vscode/
+.idea/
+
+# ======================
+# Secrets
+# ======================
+.env.local
+.env.production
+
+# ======================
+# Local API data
+# ======================
+data/
+*.db
+*.sqlite
+*.parquet
+*.bin
+*.tar
+*.gz
