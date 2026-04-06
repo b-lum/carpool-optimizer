@@ -31,7 +31,7 @@ and run:
 
 docker compose up
 
-ignore following steps if you don't want to use a local api
+ignore following steps about OSRM if you don't want to use a local api
 
 ### 1. Install OSRM
 ```bash
