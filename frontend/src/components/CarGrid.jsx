@@ -7,7 +7,7 @@ const CELL_W = 100
 const CELL_H = 40
 const LABEL_W = 36
 
-export default function CarGrid({ car, selected, dragHandler, onCellClick, onRemove }) {
+export default function CarGrid({ car, selected, dragHandler, onCellClick, onRemove, routeSummary }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: '20px' }}>
       
@@ -23,6 +23,17 @@ export default function CarGrid({ car, selected, dragHandler, onCellClick, onRem
           · {car.getAvailableSeats()} open
         </span>
       </div>
+
+      {/* Route summary */}
+      {routeSummary ? (
+        <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '6px', display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <span>🕐 {routeSummary.duration_human}</span>
+          <span style={{ color: '#d1d5db' }}>·</span>
+          <span>📍 {(parseFloat(routeSummary.distance_km) * 0.621371).toFixed(1)} mi</span>
+        </div>
+      ) : (
+        <div style={{ fontSize: '11px', color: '#d1d5db', marginBottom: '6px' }}>no route yet</div>
+      )}
 
       {/* Seats */}
       {car.seats.map((person, idx) => {

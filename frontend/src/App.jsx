@@ -1,11 +1,10 @@
 // App.jsx
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import MapView from './components/MapView'
 import RosterImporter from './components/RosterImporter'
 import CarBuilder from './components/CarBuilder'
 import DestinationPicker from './components/DestinationPicker'
 import OptimizeButton from './components/OptimizeButton'
-import RoutePanel from './components/RoutePanel'
 import CarGrid from './components/CarGrid'
 import PeoplePool from './components/PeoplePool'
 import { Car } from './models/Car'
@@ -22,7 +21,51 @@ export default function App() {
   const [selected, setSelected] = useState(null)
   // sidelined: Set of emails — people excluded from auto-assign
   const [sidelined, setSidelined] = useState(new Set())
+  // absent: Set of emails — people marked as not attending
+  const [absentEmails, setAbsentEmails] = useState(new Set())
   const [usePublicOSRM, setUsePublicOSRM] = useState(false)
+  const [mode, setMode] = useState('pickup') // 'pickup' | 'dropoff'
+
+  // ── Resizable panels ───────────────────────────────────────────────────────
+  const [leftWidth, setLeftWidth] = useState(200)
+  const [rightWidth, setRightWidth] = useState(500)
+  const containerRef = useRef(null)
+
+  function startResize(side) {
+    return function(e) {
+      e.preventDefault()
+      const startX = e.clientX
+      const startLeft = leftWidth
+      const startRight = rightWidth
+
+      function onMove(e) {
+        const containerW = containerRef.current?.offsetWidth ?? window.innerWidth
+        const minW = 140
+        const maxLeft = containerW - rightWidth - 300
+        const maxRight = containerW - leftWidth - 300
+
+        if (side === 'left') {
+          const next = Math.max(minW, Math.min(maxLeft, startLeft + (e.clientX - startX)))
+          setLeftWidth(next)
+        } else {
+          const next = Math.max(minW, Math.min(maxRight, startRight - (e.clientX - startX)))
+          setRightWidth(next)
+        }
+      }
+
+      function onUp() {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    }
+  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const findByEmail = email => roster.get(email)
@@ -38,13 +81,16 @@ export default function App() {
     setRoster(next)
     setCarInstances([])
     setSelected(null)
+    setAbsentEmails(new Set())
   }
 
   // ── Unassigned pool ────────────────────────────────────────────────────────
   const assignedNames = new Set(
     carInstances.flatMap(car => car.seats.filter(Boolean).map(p => p.name))
   )
-  const unassigned = roster.toArray().filter(p => !assignedNames.has(p.name) && !sidelined.has(p.email))
+  const unassigned = roster.toArray().filter(p => !assignedNames.has(p.name) && !sidelined.has(p.email) && !absentEmails.has(p.email))
+  // allPoolPeople: everyone not sidelined and not assigned — includes absent so they show greyed in pool
+  const allPoolPeople = roster.toArray().filter(p => !sidelined.has(p.email) && !assignedNames.has(p.name))
   const sidelinedPeople = roster.toArray().filter(p => sidelined.has(p.email))
 
   // ── Car helpers ────────────────────────────────────────────────────────────
@@ -157,6 +203,23 @@ export default function App() {
     setSelected(null)
   }
 
+  function toggleAbsent(person) {
+    setAbsentEmails(prev => {
+      const next = new Set(prev)
+      if (next.has(person.email)) next.delete(person.email)
+      else next.add(person.email)
+      return next
+    })
+  }
+
+  function toggleAllAbsent(makeAllAbsent) {
+    if (makeAllAbsent) {
+      setAbsentEmails(new Set(roster.toArray().map(p => p.email)))
+    } else {
+      setAbsentEmails(new Set())
+    }
+  }
+
   function unsidelinePerson(person) {
     setSidelined(prev => {
       const next = new Set(prev)
@@ -228,7 +291,7 @@ export default function App() {
     }
   }, [selected, movePerson])
 
-  // ── Legacy shape for OptimizeButton / RoutePanel ──────────────────────────
+  // ── Legacy shape for OptimizeButton ──────────────────────────────────────
   const legacyCars = carInstances.map(car => ({
     id: car.id,
     driver: {
@@ -244,7 +307,7 @@ export default function App() {
       .map(p => ({ ...p, lat: p.geolocation?.[0], lon: p.geolocation?.[1] })),
   }))
 
-  const flatRoster = roster.toArray().filter(p => !sidelined.has(p.email)).map(p => ({
+  const flatRoster = roster.toArray().filter(p => !sidelined.has(p.email) && !absentEmails.has(p.email)).map(p => ({
     name: p.name,
     email: p.email,
     address: p.address,
@@ -256,14 +319,36 @@ export default function App() {
   const rosterPeople = roster.toArray()
 
   return (
-    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
+    <div ref={containerRef} style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
       <PeoplePool
+        width={leftWidth}
         people={unassigned}
+        allPeople={allPoolPeople}
         selected={selected}
         onCellClick={handlePoolClick}
         dragHandler={dragHandler}
         usePublicOSRM={usePublicOSRM}
         onToggleOSRM={() => setUsePublicOSRM(o => !o)}
+        mode={mode}
+        onToggleMode={() => setMode(m => m === 'pickup' ? 'dropoff' : 'pickup')}
+        absentEmails={absentEmails}
+        onToggleAbsent={toggleAbsent}
+        onToggleAllAbsent={toggleAllAbsent}
+      />
+
+      {/* Left resize handle */}
+      <div
+        onMouseDown={startResize('left')}
+        style={{
+          width: '5px',
+          flexShrink: 0,
+          cursor: 'col-resize',
+          background: 'transparent',
+          transition: 'background 0.15s',
+          zIndex: 10,
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = '#93c5fd'}
+        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
@@ -320,6 +405,7 @@ export default function App() {
               onLoading={setLoading}
               onError={setError}
               usePublicOSRM={usePublicOSRM}
+              mode={mode}
             />
             {error && <div style={{ marginTop: '6px', fontSize: '12px', color: '#b91c1c' }}>{error}</div>}
             {loading && <div style={{ marginTop: '6px', fontSize: '12px', color: '#6b7280' }}>Optimizing…</div>}
@@ -342,10 +428,12 @@ export default function App() {
               across {carInstances.length} car{carInstances.length !== 1 ? 's' : ''}
             </div>
           )}
-          {carInstances.map(car => (
-            <CarGrid
+          {carInstances.map(car => {
+            const routeSummary = routes.find(r => r.car.id === car.id)?.route?.summary ?? null
+            return <CarGrid
               key={car.id}
               car={car}
+              routeSummary={routeSummary}
               selected={selected}
               dragHandler={dragHandler}
               onCellClick={handleCellClick}
@@ -359,7 +447,7 @@ export default function App() {
                 setSelected(null)
               }}
             />
-          ))}
+          })}
 
           {/* Sidelined — people excluded from auto-assign */}
           <div
@@ -412,17 +500,24 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ width: '500px', flexShrink: 0, borderLeft: '1px solid #e5e7eb', position: 'relative' }}>
+      {/* Right resize handle */}
+      <div
+        onMouseDown={startResize('right')}
+        style={{
+          width: '5px',
+          flexShrink: 0,
+          cursor: 'col-resize',
+          background: 'transparent',
+          transition: 'background 0.15s',
+          zIndex: 10,
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = '#93c5fd'}
+        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+      />
+
+      <div style={{ width: rightWidth + 'px', flexShrink: 0, borderLeft: '1px solid #e5e7eb', position: 'relative' }}>
         <MapView routes={routes} destination={destination} />
-        {routes.length > 0 && (
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0,
-            maxHeight: '40%', overflowY: 'auto',
-            background: '#fff', borderTop: '1px solid #e5e7eb', padding: '12px',
-          }}>
-            <RoutePanel routes={routes} cars={legacyCars} />
-          </div>
-        )}
+
       </div>
     </div>
   )

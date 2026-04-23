@@ -34,6 +34,7 @@ export default function OptimizeButton({
   onLoading,
   onError,
   usePublicOSRM,
+  mode,
 }) {
 
   async function handleOptimize() {
@@ -45,27 +46,28 @@ export default function OptimizeButton({
     onRoutes([])
 
     try {
-      // Fill remaining empty seats — preserves manual assignments
-      const assignedCars = optimizeCarpool(cars, roster, destination)
-
-      // Notify App so CarGrids reflect the newly filled seats immediately
+      const assignedCars = optimizeCarpool(cars, roster, destination, mode)
       onAssigned?.(assignedCars)
 
-      // Call routing API for each car: driver → passengers → destination
       const routePromises = assignedCars.map(async car => {
         const waypoints = car.passengers.map(p => ({ lat: p.lat, lon: p.lon }))
 
+        // pickup:  driver → passengers → destination
+        // dropoff: destination → passengers → driver home
+        const origin      = mode === 'dropoff'
+          ? { lat: destination.lat, lon: destination.lon }
+          : { lat: car.driver.lat, lon: car.driver.lon }
+        const dest        = mode === 'dropoff'
+          ? { lat: car.driver.lat, lon: car.driver.lon }
+          : { lat: destination.lat, lon: destination.lon }
+
         let route
         if (usePublicOSRM) {
-          route = await fetchPublicRoute(
-            { lat: car.driver.lat, lon: car.driver.lon },
-            { lat: destination.lat, lon: destination.lon },
-            waypoints,
-          )
+          route = await fetchPublicRoute(origin, dest, waypoints)
         } else {
           const { data } = await axios.post('http://localhost:3000/api/route', {
-            origin: { lat: car.driver.lat, lon: car.driver.lon },
-            destination: { lat: destination.lat, lon: destination.lon },
+            origin,
+            destination: dest,
             waypoints,
           })
           route = data

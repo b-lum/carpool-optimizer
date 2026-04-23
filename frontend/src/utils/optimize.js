@@ -1,10 +1,20 @@
 // optimize.js
 // Fills remaining empty seats in cars with unassigned people.
-// Mirrors the fill() function in Lineup.js:
 //   - Keeps existing manual passenger assignments intact
 //   - Only assigns truly unassigned people to open seats
-//   - Uses distance-based greedy assignment (nearest car first)
+//   - Prefers cars under the stop cap (soft cap: 2 stops, hard cap: 3)
+//   - Uses a combined cost: distance to driver + penalty per existing stop
 //   - Orders pickup stops with nearest-neighbor routing
+
+// STOP_PENALTY: km-equivalent cost added per existing stop on a car.
+// e.g. 20 means "one extra stop feels like being 20km farther away"
+const STOP_PENALTY_KM = 20
+
+// Soft cap: try not to exceed this many stops per car
+const SOFT_STOP_CAP = 2
+
+// Hard cap: never exceed this many stops per car (unless no other option)
+const HARD_STOP_CAP = 3
 
 function distance(a, b) {
   const R = 6371
@@ -16,7 +26,15 @@ function distance(a, b) {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))
 }
 
-export function optimizeCarpool(cars, roster, destination) {
+// Combined cost: distance to driver + penalty for each stop already on the car.
+// Adding this group would add 1 new stop (all people in a location bucket = 1 stop).
+function cost(car, representative) {
+  const dist = distance(representative, car.driver)
+  const stopPenalty = car.passengers.length * STOP_PENALTY_KM
+  return dist + stopPenalty
+}
+
+export function optimizeCarpool(cars, roster, destination, mode = 'pickup') {
 
   // ── 1. Clone cars, preserving existing passenger assignments ──────────────
   const assigned = cars.map(c => ({
@@ -32,7 +50,8 @@ export function optimizeCarpool(cars, roster, destination) {
   }
 
   // ── 3. Group unassigned people by location ────────────────────────────────
-  // Round to ~100m precision so people at the "same" address bucket together
+  // Round to ~100m precision so people at the "same" address bucket together.
+  // Each bucket = 1 stop, regardless of how many people are in it.
   const locationKey = p => `${p.lat.toFixed(3)},${p.lon.toFixed(3)}`
 
   const buckets = new Map()
@@ -46,69 +65,98 @@ export function optimizeCarpool(cars, roster, destination) {
   // ── 4. Sort groups largest → smallest ────────────────────────────────────
   const groups = [...buckets.values()].sort((a, b) => b.length - a.length)
 
-  // ── 5. Assign groups to cars greedily ────────────────────────────────────
-  // For each group, find the car that:
-  //   a) has enough open seats for the whole group, AND
-  //   b) is closest to the group's location
-  // If no car fits the whole group, find the car with the most open seats,
-  // fill it as much as possible, and re-queue the remainder as a smaller group.
-  const openSeats = car =>
-    car.capacity - 1 - car.passengers.length
+  // ── 5. Helpers ────────────────────────────────────────────────────────────
+  const openSeats = car => car.capacity - 1 - car.passengers.length
 
-  const queue = [...groups]
+  // stopCount: number of *distinct location stops* already on the car.
+  // Since all people in a bucket share a location, count unique locations.
+  const stopCount = car => {
+    const locs = new Set(car.passengers.map(p => locationKey(p)))
+    return locs.size
+  }
 
-  while (queue.length > 0) {
-    const group = queue.shift()
-    const representative = group[0] // use first person for distance calc
-
-    // Find best car that fits the whole group
+  // Find the best car for a group, subject to a stop ceiling.
+  // Returns { car, cost } or null if no eligible car found.
+  function findBestCar(group, stopCeiling) {
+    const representative = group[0]
     let bestCar = null
-    let bestDist = Infinity
+    let bestCost = Infinity
+
     for (const car of assigned) {
       if (openSeats(car) < group.length) continue
-      const dist = distance(representative, car.driver)
-      if (dist < bestDist) {
-        bestDist = dist
+      // Adding this group adds 1 new stop (they all share a location)
+      if (stopCount(car) + 1 > stopCeiling) continue
+
+      const c = cost(car, representative)
+      if (c < bestCost) {
+        bestCost = c
         bestCar = car
       }
     }
 
+    return bestCar
+  }
+
+  // ── 6. Assign groups to cars ──────────────────────────────────────────────
+  // Strategy per group:
+  //   Pass 1: find a car under SOFT_STOP_CAP with enough seats (combined cost)
+  //   Pass 2: relax to HARD_STOP_CAP
+  //   Pass 3: partial fill — same two-pass logic, fill what fits, re-queue rest
+  const queue = [...groups]
+
+  while (queue.length > 0) {
+    const group = queue.shift()
+    const representative = group[0]
+
+    // Pass 1: whole group fits, under soft cap
+    let bestCar = findBestCar(group, SOFT_STOP_CAP)
+
+    // Pass 2: whole group fits, relax to hard cap
+    if (!bestCar) bestCar = findBestCar(group, HARD_STOP_CAP)
+
     if (bestCar) {
-      // Whole group fits — assign them all
       for (const p of group) bestCar.passengers.push(p)
-    } else {
-      // No car fits the whole group — find the car with the most open seats
-      // (closest among tied cars) and partially fill it, re-queue the rest
-      let partialCar = null
-      let mostOpen = 0
-      let closestDist = Infinity
+      continue
+    }
+
+    // Pass 3: nobody fits the whole group — partial fill with same stop logic.
+    // Try soft cap first, then hard cap.
+    let partialCar = null
+    let bestPartialCost = Infinity
+
+    for (const stopCeiling of [SOFT_STOP_CAP, HARD_STOP_CAP]) {
       for (const car of assigned) {
         const open = openSeats(car)
         if (open <= 0) continue
-        const dist = distance(representative, car.driver)
-        if (open > mostOpen || (open === mostOpen && dist < closestDist)) {
-          mostOpen = open
-          closestDist = dist
+        if (stopCount(car) + 1 > stopCeiling) continue
+
+        const c = cost(car, representative)
+        if (c < bestPartialCost) {
+          bestPartialCost = c
           partialCar = car
         }
       }
-
-      if (partialCar) {
-        const toAdd = group.slice(0, mostOpen)
-        const remainder = group.slice(mostOpen)
-        for (const p of toAdd) partialCar.passengers.push(p)
-        if (remainder.length > 0) queue.push(remainder) // retry the rest
-      }
-      // if no car has any open seats at all, these people just don't get assigned
+      if (partialCar) break // found one under soft cap, no need to try hard cap
     }
+
+    if (partialCar) {
+      const open = openSeats(partialCar)
+      const toAdd = group.slice(0, open)
+      const remainder = group.slice(open)
+      for (const p of toAdd) partialCar.passengers.push(p)
+      if (remainder.length > 0) queue.push(remainder)
+    }
+    // if truly no car has any open seats, these people go unassigned
   }
 
-  // ── 6. Order pickup stops with nearest-neighbor for each car ──────────────
+  // ── 7. Order pickup stops with nearest-neighbor for each car ──────────────
+  // pickup:  driver → nearest passenger → ... → destination
+  // dropoff: destination → nearest passenger → ... → driver home
   for (const car of assigned) {
     if (car.passengers.length === 0) continue
 
     const ordered = []
-    let current = car.driver
+    let current = mode === 'dropoff' ? destination : car.driver
     const remaining = [...car.passengers]
 
     while (remaining.length > 0) {
