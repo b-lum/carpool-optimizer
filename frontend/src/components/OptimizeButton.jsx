@@ -54,12 +54,19 @@ export default function OptimizeButton({
 
         // pickup:  driver → passengers → destination
         // dropoff: destination → passengers → driver home
-        const origin      = mode === 'dropoff'
+        const origin = mode === 'dropoff'
           ? { lat: destination.lat, lon: destination.lon }
           : { lat: car.driver.lat, lon: car.driver.lon }
-        const dest        = mode === 'dropoff'
+        const dest = mode === 'dropoff'
           ? { lat: car.driver.lat, lon: car.driver.lon }
           : { lat: destination.lat, lon: destination.lon }
+
+        // Guard: if any coordinate is missing, skip routing for this car
+        const allPoints = [origin, dest, ...waypoints]
+        if (allPoints.some(p => p.lat == null || p.lon == null || isNaN(p.lat) || isNaN(p.lon))) {
+          console.warn(`Skipping route for ${car.driver.name}: missing coordinates`, { origin, dest, waypoints })
+          return null
+        }
 
         let route
         if (usePublicOSRM) {
@@ -76,11 +83,13 @@ export default function OptimizeButton({
         return { car, route }
       })
 
-      const results = await Promise.all(routePromises)
+      const results = (await Promise.all(routePromises)).filter(Boolean)
       onRoutes(results)
 
     } catch (err) {
-      onError(err.response?.data?.error || err.message || 'Something went wrong')
+      const msg = err.response?.data?.error || err.message || 'Something went wrong'
+      const status = err.response?.status
+      onError(status ? `${msg} (HTTP ${status})` : msg)
     } finally {
       onLoading(false)
     }

@@ -36,10 +36,9 @@ export default function CarGrid({ car, selected, dragHandler, onCellClick, onRem
       )}
 
       {/* Seats */}
-      {car.seats.map((person, idx) => {
+      {[...car.seats.entries()].map(([idx, person]) => {
         const isDriver = idx === 0
         const badge = isDriver ? 'DRV' : `S${idx}`
-
         const isSelected = selected?.type === 'seat' && selected?.carId === car.id && selected?.index === idx
 
         return (

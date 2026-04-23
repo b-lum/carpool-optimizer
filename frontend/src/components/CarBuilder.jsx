@@ -5,7 +5,7 @@ const CAR_COLORS = ['#2563eb', '#dc2626', '#059669', '#d97706', '#7c3aed', '#db2
 export default function CarBuilder({ roster, cars, setCars }) {
   const [searchTerm, setSearchTerm] = useState('')
   const [dropdownOpen, setDropdownOpen] = useState(false)
-  const [capacity, setCapacity] = useState(4)
+  const [capacity, setCapacity] = useState(5)
   const inputRef = useRef(null)
   const dropdownRef = useRef(null)
 

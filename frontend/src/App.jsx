@@ -85,36 +85,47 @@ export default function App() {
   }
 
   // ── Unassigned pool ────────────────────────────────────────────────────────
-  const assignedNames = new Set(
-    carInstances.flatMap(car => car.seats.filter(Boolean).map(p => p.name))
+  const assignedEmails = new Set(
+    carInstances.flatMap(car => [...car.seats.values()].filter(Boolean).map(p => p.email))
   )
-  const unassigned = roster.toArray().filter(p => !assignedNames.has(p.name) && !sidelined.has(p.email) && !absentEmails.has(p.email))
+  const unassigned = roster.toArray().filter(p => !assignedEmails.has(p.email) && !sidelined.has(p.email) && !absentEmails.has(p.email))
   // allPoolPeople: everyone not sidelined and not assigned — includes absent so they show greyed in pool
-  const allPoolPeople = roster.toArray().filter(p => !sidelined.has(p.email) && !assignedNames.has(p.name))
+  const allPoolPeople = roster.toArray().filter(p => !sidelined.has(p.email) && !assignedEmails.has(p.email))
   const sidelinedPeople = roster.toArray().filter(p => sidelined.has(p.email))
 
   // ── Car helpers ────────────────────────────────────────────────────────────
   function cloneCar(car) {
     const c = Object.create(Object.getPrototypeOf(car))
     Object.assign(c, car)
-    c.seats = [...car.seats]
+    c.seats = new Map(car.seats)
     return c
   }
 
   function addPersonToCar(car, person) {
-    const index = car.seats.findIndex(s => !s)
-    if (index === -1) return false
-    car.seats[index] = person
-    car.seatsTaken += 1
-    return true
+    // Duplicate guard
+    for (const [, occupant] of car.seats) {
+      if (occupant?.email === person.email) return false
+    }
+    for (let i = 1; i < car.seatCapacity; i++) {
+      if (!car.seats.get(i)) {
+        car.seats.set(i, person)
+        car.seatsTaken += 1
+        return true
+      }
+    }
+    return false
   }
 
-  function removePersonFromCar(car, personName) {
-    const index = car.seats.findIndex(s => s?.name === personName)
-    if (index <= 0) return false // cannot remove driver or empty
-    car.seats[index] = undefined
-    car.seatsTaken -= 1
-    return true
+  function removePersonFromCar(car, personEmail) {
+    for (const [idx, occupant] of car.seats) {
+      if (idx === 0) continue // cannot remove driver
+      if (occupant?.email === personEmail) {
+        car.seats.set(idx, undefined)
+        car.seatsTaken -= 1
+        return true
+      }
+    }
+    return false
   }
 
   // ── Handle assignment from OptimizeButton ──────────────────────────────────
@@ -126,10 +137,10 @@ export default function App() {
         const car = next.find(c => c.id === lc.id)
         if (!car) continue
 
-        const alreadyIn = new Set(car.seats.filter(Boolean).map(p => p.name))
+        const alreadyIn = new Set([...car.seats.values()].filter(Boolean).map(p => p.email))
 
         for (const legacyPassenger of lc.passengers) {
-          if (alreadyIn.has(legacyPassenger.name)) continue
+          if (alreadyIn.has(legacyPassenger.email)) continue
 
           const person =
             (legacyPassenger.email ? findByEmail(legacyPassenger.email) : null)
@@ -137,7 +148,7 @@ export default function App() {
             ?? legacyPassenger
 
           addPersonToCar(car, person)
-          alreadyIn.add(person.name)
+          alreadyIn.add(person.email)
         }
       }
 
@@ -160,7 +171,7 @@ export default function App() {
       } else if (from.type === 'seat') {
         fromCar = next.find(c => c.id === from.carId)
         if (!fromCar) return prev
-        person = fromCar.seats[from.index]
+        person = fromCar.seats.get(from.index)
       }
 
       if (!person) return prev
@@ -177,16 +188,17 @@ export default function App() {
 
       // Seat → Pool
       if (from.type === 'seat' && to.type === 'pool') {
-        removePersonFromCar(fromCar, person.name)
+        removePersonFromCar(fromCar, person.email)
         return next
       }
 
       // Seat → Seat
       if (from.type === 'seat' && to.type === 'seat') {
-        const targetPerson = toCar.seats[to.index]
-        removePersonFromCar(fromCar, person.name)
+        if (from.carId === to.carId && from.index === to.index) return prev
+        const targetPerson = toCar.seats.get(to.index)
+        removePersonFromCar(fromCar, person.email)
         if (targetPerson) {
-          removePersonFromCar(toCar, targetPerson.name)
+          removePersonFromCar(toCar, targetPerson.email)
           addPersonToCar(fromCar, targetPerson)
         }
         addPersonToCar(toCar, person)
@@ -237,12 +249,12 @@ export default function App() {
       if (person) sidelinePerson(person)
     } else if (from.type === 'seat') {
       const car = carInstances.find(c => c.id === from.carId)
-      const person = car?.seats[from.index]
+      const person = car?.seats.get(from.index)
       if (car && person) {
         setCarInstances(prev => {
           const next = prev.map(c => cloneCar(c))
           const fc = next.find(c => c.id === from.carId)
-          if (fc) removePersonFromCar(fc, person.name)
+          if (fc) removePersonFromCar(fc, person.email)
           return next
         })
         sidelinePerson(person)
@@ -276,6 +288,10 @@ export default function App() {
       return
     }
     if (selected) {
+      if (selected.type === 'seat' && selected.carId === meta.carId && selected.index === index) {
+        setSelected(null)
+        return
+      }
       movePerson({ from: selected, to: { ...meta, index } })
       setSelected(null)
     }
@@ -301,10 +317,9 @@ export default function App() {
     },
     color: car.color,
     capacity: car.seatCapacity,
-    passengers: car.seats
-      .slice(1)
-      .filter(Boolean)
-      .map(p => ({ ...p, lat: p.geolocation?.[0], lon: p.geolocation?.[1] })),
+    passengers: [...car.seats.entries()]
+      .filter(([idx, p]) => idx > 0 && p)
+      .map(([, p]) => ({ ...p, lat: p.geolocation?.[0], lon: p.geolocation?.[1] })),
   }))
 
   const flatRoster = roster.toArray().filter(p => !sidelined.has(p.email) && !absentEmails.has(p.email)).map(p => ({
@@ -441,7 +456,7 @@ export default function App() {
                 setCarInstances(prev => {
                   const next = prev.map(c => cloneCar(c))
                   const fc = next.find(c => c.id === car.id)
-                  if (fc) removePersonFromCar(fc, fc.seats[index]?.name)
+                  if (fc) removePersonFromCar(fc, fc.seats.get(index)?.email)
                   return next
                 })
                 setSelected(null)
