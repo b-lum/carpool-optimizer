@@ -2,6 +2,9 @@
 
 A carpooling optimization app built on OpenStreetMap data. Upload a roster, create cars, set a destination, and the app figures out who rides with who and the best pickup order to minimize travel time and distance.
 
+## Demo
+https://carpool-optimizer-frontend.pages.dev/
+
 ## Stack
 
 - **Frontend** — React + Vite + MapLibre GL
